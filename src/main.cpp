@@ -34,12 +34,23 @@ int main (int argc, char * argv[]) {
 
     auto & main_loop = IOLoop::current();
 
-    main_loop.add_timeout([]()->void {
-        std::cout << "after 1 second" << std::endl;
-    }, 1000);
+    int i = 5;
+    IOLoop::Key j = 0ULL;
+
     main_loop.add_callback([]()->void {
         std::cout << "later" << std::endl;
     });
+    main_loop.add_timeout([]()->void {
+        std::cout << "after 1 second" << std::endl;
+    }, 1000);
+    j = main_loop.add_timer([&i, &j, &main_loop]()->void {
+        std::cout << "periodic " << i << std::endl;
+        if (i > 0) {
+            --i;
+        } else {
+            main_loop.remove_timer(j);
+        }
+    }, 500);
     std::cout << "start" << std::endl;
 
     main_loop.start();

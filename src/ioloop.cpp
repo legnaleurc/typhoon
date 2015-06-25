@@ -46,7 +46,7 @@ public:
         return loops;
     }
 
-    Private(): loop(), gk() {
+    Private(): loop(), gk(), timeouts(), timers() {
         std::random_device rd;
         std::array<std::random_device::result_type, std::mt19937_64::state_size> rawseeds;
         std::generate_n(rawseeds.data(), rawseeds.size(), std::ref(rd));
@@ -55,8 +55,24 @@ public:
         this->gk = std::bind(std::uniform_int_distribution<IOLoop::Key>(), engine);
     }
 
+    bool timer_next(IOLoop::Key key, const IOLoop::Callback & cb, uint64_t ms) {
+        auto it = this->timers.find(key);
+        if (it == this->timers.end()) {
+            return false;
+        }
+        auto t = it->second;
+        t->expires_from_now(boost::posix_time::milliseconds(ms));
+        t->async_wait([this, key, cb, ms](const boost::system::error_code & e)->void {
+            if (this->timer_next(key, cb, ms)) {
+                cb();
+            }
+        });
+        return true;
+    }
+
     boost::asio::io_service loop;
     std::function<IOLoop::Key ()> gk;
+    std::unordered_map<IOLoop::Key, std::shared_ptr<boost::asio::deadline_timer>> timeouts;
     std::unordered_map<IOLoop::Key, std::shared_ptr<boost::asio::deadline_timer>> timers;
 };
 
@@ -99,16 +115,34 @@ void IOLoop::add_callback(const IOLoop::Callback & cb) {
 IOLoop::Key IOLoop::add_timeout(const IOLoop::Callback & cb, uint64_t ms) {
     auto key = this->p->gk();
     auto t = std::make_shared<boost::asio::deadline_timer>(this->p->loop);
-    this->p->timers.insert(std::make_pair(key, t));
+    this->p->timeouts.insert(std::make_pair(key, t));
     t->expires_from_now(boost::posix_time::milliseconds(ms));
     t->async_wait([this, key, cb](const boost::system::error_code & e)->void {
-        this->p->timers.erase(key);
+        this->p->timeouts.erase(key);
         cb();
     });
     return key;
 }
 
 bool IOLoop::remove_timeout(Key id) {
+    auto it = this->p->timeouts.find(id);
+    if (it == this->p->timeouts.end()) {
+        return false;
+    }
+    it->second->cancel();
+    this->p->timeouts.erase(it);
+    return true;
+}
+
+IOLoop::Key IOLoop::add_timer(const IOLoop::Callback & cb, uint64_t ms) {
+    auto key = this->p->gk();
+    auto t = std::make_shared<boost::asio::deadline_timer>(this->p->loop);
+    this->p->timers.insert(std::make_pair(key, t));
+    this->p->timer_next(key, cb, ms);
+    return key;
+}
+
+bool IOLoop::remove_timer(Key id) {
     auto it = this->p->timers.find(id);
     if (it == this->p->timers.end()) {
         return false;
